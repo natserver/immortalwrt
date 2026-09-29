@@ -134,12 +134,15 @@ jobs:
           check '^CONFIG_PACKAGE_dae=y$'
           check '^CONFIG_PACKAGE_daed=y$'
           check '^CONFIG_PACKAGE_luci-app-daede=y$'
+          check '^CONFIG_PACKAGE_luci-app-daed=y$'
           check '^CONFIG_PACKAGE_vmlinux-btf=m$'
           check '^CONFIG_PACKAGE_kmod-sched-core=y$'
           check '^CONFIG_PACKAGE_kmod-sched-bpf=y$'
           check '^CONFIG_PACKAGE_kmod-veth=y$'
           check '^CONFIG_PACKAGE_v2ray-geoip=y$'
           check '^CONFIG_PACKAGE_v2ray-geosite=y$'
+          check '^CONFIG_PACKAGE_daed-geoip=y$'
+          check '^CONFIG_PACKAGE_daed-geosite=y$'
 
           if grep -qE '^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y$' .config; then
             echo "  FAIL CONFIG_KERNEL_DEBUG_INFO_REDUCED 必须关闭，否则内核 BTF 不会生成"
