@@ -60,7 +60,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential clang lld llvm llvm-dev llvm-tools \
+            build-essential clang lld llvm llvm-dev \
             flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git file patch cpio bzip2 zip unzip wget curl rsync time \
             libncurses-dev libssl-dev zlib1g-dev libbz2-dev libzstd-dev \
@@ -122,6 +122,8 @@ jobs:
           check '^CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y$'
           check '^CONFIG_TARGET_ROOTFS_PARTSIZE=8192$'
           check '^CONFIG_VERSION_DIST="NatserverWrt"$'
+          check '^CONFIG_IMAGEOPT=y$'
+          check '^CONFIG_VERSIONOPT=y$'
           check '^CONFIG_DEVEL=y$'
           check '^CONFIG_BPF_TOOLCHAIN_HOST=y$'
           check '^CONFIG_KERNEL_DEBUG_INFO=y$'
@@ -151,11 +153,15 @@ jobs:
       - name: 下载源码包
         run: |
           cd openwrt
-          make download -j"$(nproc)" 2>&1 | tee ../download.log || {
-            echo "::error::源码下载失败"
-            tail -n 300 ../download.log
-            exit 1
-          }
+          if ! make download -j"$(nproc)" 2>&1 | tee ../download.log; then
+            echo "::warning::第一次下载失败，清理不完整文件后重试"
+            find dl -size -1024c -type f -delete 2>/dev/null || true
+            make download -j"$(nproc)" 2>&1 | tee -a ../download.log || {
+              echo "::error::源码下载失败"
+              tail -n 300 ../download.log
+              exit 1
+            }
+          fi
 
       - name: 编译固件
         run: |
