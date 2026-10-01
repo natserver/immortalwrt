@@ -144,6 +144,27 @@ jobs:
           check '^CONFIG_PACKAGE_daed-geoip=y$'
           check '^CONFIG_PACKAGE_daed-geosite=y$'
 
+          # ---- iStoreOS 应用商店（iStore）----
+          # 常见坑：taskd 的依赖链里 script-utils / coreutils-stty 名字很怪，
+          # 一旦有一个不满足，defconfig 会把 taskd、luci-lib-taskd、luci-app-store
+          # 整条链【静默丢弃】，编出来的固件「应用商店菜单直接没有」。
+          check '^CONFIG_PACKAGE_luci-app-store=y$'
+          check '^CONFIG_PACKAGE_taskd=y$'
+          check '^CONFIG_PACKAGE_luci-lib-taskd=y$'
+          check '^CONFIG_PACKAGE_luci-lib-xterm=y$'
+          check '^CONFIG_PACKAGE_luci-compat=y$'
+          check '^CONFIG_PACKAGE_script-utils=y$'
+          check '^CONFIG_PACKAGE_coreutils=y$'
+          check '^CONFIG_PACKAGE_coreutils-stty=y$'
+          check '^CONFIG_PACKAGE_mount-utils=y$'
+
+          # ---- iStoreOS 外观（Argon 主题）与中文界面 ----
+          check '^CONFIG_PACKAGE_luci-theme-argon=y$'
+          check '^CONFIG_PACKAGE_luci-app-argon-config=y$'
+          check '^CONFIG_LUCI_LANG_zh_Hans=y$'
+          check '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$'
+          check '^CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y$'
+
           if grep -qE '^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y$' .config; then
             echo "  FAIL CONFIG_KERNEL_DEBUG_INFO_REDUCED 必须关闭，否则内核 BTF 不会生成"
             fail=1
@@ -201,16 +222,140 @@ jobs:
           fi
 
           {
-            echo "ImmortalWrt $SRC_TAG · CMCC RAX3000M (eMMC) · daed"
+            echo "ImmortalWrt $SRC_TAG · CMCC RAX3000M (eMMC) · daed + iStoreOS 界面"
             echo "构建时间: $(date '+%F %T %Z')"
             echo ""
             echo "== 关键配置 =="
             grep -E '^(CONFIG_VERSION_DIST|CONFIG_TARGET_ROOTFS_PARTSIZE|CONFIG_TARGET_mediatek_filogic_DEVICE|CONFIG_BPF_TOOLCHAIN|CONFIG_KERNEL_DEBUG_INFO|CONFIG_PACKAGE_dae|CONFIG_PACKAGE_daed|CONFIG_PACKAGE_luci-app-daede|CONFIG_PACKAGE_vmlinux-btf)=' openwrt/.config || true
             echo ""
+            echo "== 系统分区（解析 emmc-gpt.bin）=="
+            python3 scripts/check-gpt.py "$SRC"/*cmcc_rax3000m-emmc-gpt.bin || true
+            echo "  → overlay 可用空间 = production 分区 − FIT 镜像大小（fitblk 映射 /dev/fitrw）"
+            echo ""
+            echo "== 界面组件（iStoreOS 应用商店 + Argon 主题）=="
+            grep -E '^(luci-app-store|taskd|luci-lib-taskd|luci-lib-xterm|luci-compat|script-utils|coreutils-stty|luci-theme-argon|luci-app-argon-config|luci-i18n-base-zh-cn|luci-i18n-argon-config-zh-cn) ' "$SRC"/*cmcc_rax3000m.manifest || true
+            echo ""
+            echo "== 刷机说明（eMMC 版）=="
+            echo "1. 先写 GPT / preloader / FIP（ImmortalWrt 官方刷机第 1~4 步）："
+            echo "     dd if=<...>-emmc-gpt.bin of=/dev/mmcblk0 bs=512 seek=0 count=34 conv=fsync"
+            echo "   ★ 系统分区 8G 完全由 emmc-gpt.bin 决定，sysupgrade 不会重写分区表；"
+            echo "     只刷 sysupgrade 而不刷 GPT，分区仍是原厂大小（这就是「分区太小」的常见原因）。"
+            echo "2. 进入 192.168.1.1 的 U-Boot 网页，刷入 sysupgrade.itb。"
+            echo "3. 进系统后：默认 IP 192.168.100.1，主机名 NatserverWrt，"
+            echo "   界面默认 Argon 主题 + 简体中文，左侧菜单含「iStore 应用商店」。"
+            echo ""
             echo "== SHA256 =="
             (cd firmware && sha256sum * | sort)
           } > firmware/RELEASE_NOTES.txt
           cat firmware/RELEASE_NOTES.txt
+
+      - name: 校验产物（8G 系统分区 + iStore/Argon 是否真的进了固件）
+        run: |
+          set -e
+          SRC=openwrt/bin/targets/mediatek/filogic
+          WORK=$(mktemp -d)
+
+          echo "::group::1) 系统分区大小（解析 emmc-gpt.bin）"
+          GPT=$(ls "$SRC"/*cmcc_rax3000m-emmc-gpt.bin 2>/dev/null | head -n1 || true)
+          if [ -z "$GPT" ]; then
+            echo "::error::找不到 emmc-gpt.bin，无法确认系统分区大小"
+            exit 1
+          fi
+          # system partition 必须是 8192 MiB = 8 GiB，否则说明
+          # CONFIG_TARGET_ROOTFS_PARTSIZE 没有传导到 ptgen。
+          python3 scripts/check-gpt.py "$GPT" --expect production=8192 || exit 1
+          echo "::endgroup::"
+
+          echo "::group::2) 包清单（manifest）"
+          MANIFEST=$(ls "$SRC"/*cmcc_rax3000m.manifest 2>/dev/null | head -n1 || true)
+          if [ -z "$MANIFEST" ]; then
+            echo "::error::找不到 manifest"
+            exit 1
+          fi
+          # manifest 只证明「包被装了」，不证明「服务会自启」，两者都要查。
+          FAIL=0
+          for p in luci-app-store taskd luci-lib-taskd luci-lib-xterm luci-compat \
+                   script-utils coreutils coreutils-stty \
+                   luci-theme-argon luci-app-argon-config \
+                   luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn; do
+            if grep -q "^${p} " "$MANIFEST"; then
+              echo "  ok      ${p}"
+            else
+              echo "  MISSING ${p}"
+              FAIL=1
+            fi
+          done
+          echo "::endgroup::"
+
+          echo "::group::3) rootfs 关键文件"
+          ITB=$(ls "$SRC"/*cmcc_rax3000m-squashfs-sysupgrade.itb 2>/dev/null | head -n1 || true)
+          if [ -z "$ITB" ]; then
+            echo "::error::找不到 sysupgrade.itb"
+            exit 1
+          fi
+          # FIT 用的是 mkimage -E -r（external static rootfs），rootfs 以裸 squashfs
+          # 形式落在镜像里，按魔数 'hsqs' 定位（别用 grep -P）。
+          SQ=""
+          for OFF in $(grep -abo 'hsqs' "$ITB" | cut -d: -f1 | head -n5); do
+            tail -c +$((OFF + 1)) "$ITB" > "$WORK/cand.sqsh"
+            if unsquashfs -s "$WORK/cand.sqsh" >/dev/null 2>&1; then
+              echo "squashfs 偏移: $OFF"
+              mv "$WORK/cand.sqsh" "$WORK/root.sqsh"
+              SQ="$WORK/root.sqsh"
+              break
+            fi
+          done
+          if [ -z "$SQ" ]; then
+            echo "::warning::未能从 itb 定位 squashfs，跳过 rootfs 内容校验"
+          else
+            # 只读目录表，绝不真正解包（解包 + 兜底重试会撞 File exists 把步骤搞挂）
+            unsquashfs -l "$SQ" 2>/dev/null \
+              | sed 's,^squashfs-root/*,,' | awk 'NF{print $1}' | sort -u > "$WORK/list"
+            N=$(wc -l < "$WORK/list")
+            echo "rootfs 条目: $N"
+            if [ "$N" -lt 500 ]; then
+              echo "::warning::清单读取不可靠($N)，跳过 rootfs 内容校验"
+            else
+              # 目录用前缀匹配，文件用整行匹配
+              for d in www/luci-static/istore/ www/luci-static/argon/; do
+                if grep -q "^${d}" "$WORK/list"; then
+                  echo "  ok      /${d}"
+                else
+                  echo "  MISSING /${d}"
+                  FAIL=1
+                fi
+              done
+              # 这几个是「用户肉眼能看到的缺陷」，缺失一律硬失败：
+              #   tasks             -> iStore 后端守护进程（不装应用商店打不开）
+              #   cbi.lua           -> luci-compat，iStore 老式 CBI 页面依赖
+              #   store.zh-cn.lmo   -> 应用商店中文
+              #   99-natserver      -> 首次启动固化中文/主题/服务
+              for f in etc/init.d/tasks \
+                       usr/lib/lua/luci/cbi.lua \
+                       etc/uci-defaults/99-natserver; do
+                if grep -qxF "$f" "$WORK/list"; then
+                  echo "  ok      /${f}"
+                else
+                  echo "  MISSING /${f}"
+                  FAIL=1
+                fi
+              done
+              if grep -qE '^usr/lib/lua/luci/i18n/store\.(zh-cn|zh_Hans)\.lmo$' "$WORK/list"; then
+                grep -E '^usr/lib/lua/luci/i18n/store\.' "$WORK/list" | sed 's/^/  ok      \//'
+              else
+                echo "  MISSING /usr/lib/lua/luci/i18n/store.zh-cn.lmo（应用商店界面会退回英文）"
+                FAIL=1
+              fi
+              grep '^usr/lib/lua/luci/i18n/' "$WORK/list" | sed 's/^/    /' || true
+            fi
+          fi
+          echo "::endgroup::"
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::产物缺少关键组件，刷机后界面/应用商店会有肉眼可见的缺陷"
+            exit 1
+          fi
+          echo "产物校验通过：8G 系统分区 + iStore 应用商店 + Argon 主题"
 
       - name: 上传固件 (Artifact)
         uses: actions/upload-artifact@v4
