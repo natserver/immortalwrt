@@ -107,7 +107,42 @@ jobs:
         run: |
           cd openwrt
           cp "../$SEED_CONFIG" .config
-          make defconfig
+          make defconfig 2>&1 | tee ../defconfig.log || true
+
+          # ============ 诊断：luci-app-store 为何没进 .config ============
+          # defconfig 对「依赖不满足」的包是静默丢弃，不报错，所以这里把
+          # 判断依据全部打印出来（包是否装上 / 符号是否存在 / Kconfig 依赖是什么）。
+          echo "::group::诊断 · defconfig 的 warning"
+          grep -iE "warning|unknown symbol|not set" ../defconfig.log | head -40 || echo "  (无 warning)"
+          echo "::endgroup::"
+
+          echo "::group::诊断 · luci-app-store 依赖链"
+          set +e
+          echo "--- (a) store feed 是否被 feeds install 装入 ---"
+          ls -l package/feeds/store/ 2>/dev/null || echo "  (package/feeds/store 不存在)"
+          ls -ld package/feeds/store/luci-app-store 2>/dev/null || echo "  MISSING package/feeds/store/luci-app-store"
+
+          echo "--- (b) .config 中相关符号的实际取值 ---"
+          grep -nE 'CONFIG_(PACKAGE_(luci-app-store|luci-lua-runtime|libuci-lua|liblua|lua|curl|tar|mount-utils|luci-compat|luci-lib-taskd|taskd)|LUCI_LANG_zh_Hans)' .config || echo "  (一条都没有)"
+
+          echo "--- (c) 这些符号在生成的 Kconfig 里是否存在 ---"
+          for s in PACKAGE_luci-app-store PACKAGE_luci-lua-runtime PACKAGE_libuci-lua PACKAGE_liblua PACKAGE_lua PACKAGE_curl PACKAGE_luci-lib-taskd; do
+            if grep -q "^config ${s}\$" tmp/.config-package.in; then
+              echo "  存在 ${s}"
+            else
+              echo "  缺失 ${s}"
+            fi
+          done
+
+          echo "--- (d) PACKAGE_luci-app-store 的 Kconfig 定义（看 depends/select） ---"
+          awk '/^config PACKAGE_luci-app-store$/{f=1} f{print} f&&/^(config|menuconfig) /&&$0!~/PACKAGE_luci-app-store$/{exit}' \
+            tmp/.config-package.in | head -60
+
+          echo "--- (e) tmp/.packageinfo 中的 luci-app-store 条目 ---"
+          grep -A3 '^Package: luci-app-store$' tmp/.packageinfo 2>/dev/null | head -12 || echo "  (无该条目，说明包没被 scan 到)"
+          set -e
+          echo "::endgroup::"
+          # ============ 诊断结束 ============
 
           fail=0
           check() {
@@ -115,6 +150,14 @@ jobs:
               echo "  OK   $1"
             else
               echo "  FAIL $1"
+              # $2 为可选的「符号名」，用于把 .config 里的真实行打出来（含 is not set / 不存在）
+              if [ -n "$2" ]; then
+                if grep -qE "$2" .config; then
+                  grep -E "$2" .config | head -3 | sed 's/^/       > /'
+                else
+                  echo "       > 该符号在 .config 中完全不存在（= 已被 defconfig 丢弃）"
+                fi
+              fi
               fail=1
             fi
           }
@@ -148,7 +191,7 @@ jobs:
           # 常见坑：taskd 的依赖链里 script-utils / coreutils-stty 名字很怪，
           # 一旦有一个不满足，defconfig 会把 taskd、luci-lib-taskd、luci-app-store
           # 整条链【静默丢弃】，编出来的固件「应用商店菜单直接没有」。
-          check '^CONFIG_PACKAGE_luci-app-store=y$'
+          check '^CONFIG_PACKAGE_luci-app-store=y$' 'CONFIG_PACKAGE_luci-app-store'
           check '^CONFIG_PACKAGE_taskd=y$'
           check '^CONFIG_PACKAGE_luci-lib-taskd=y$'
           check '^CONFIG_PACKAGE_luci-lib-xterm=y$'
@@ -157,6 +200,12 @@ jobs:
           check '^CONFIG_PACKAGE_coreutils=y$'
           check '^CONFIG_PACKAGE_coreutils-stty=y$'
           check '^CONFIG_PACKAGE_mount-utils=y$'
+          # luci-app-store 的直接依赖，任缺其一它都会被静默丢弃
+          check '^CONFIG_PACKAGE_libuci-lua=y$' 'CONFIG_PACKAGE_libuci-lua'
+          check '^CONFIG_PACKAGE_liblua=y$' 'CONFIG_PACKAGE_liblua'
+          check '^CONFIG_PACKAGE_lua=y$' 'CONFIG_PACKAGE_lua'
+          check '^CONFIG_PACKAGE_luci-lua-runtime=y$' 'CONFIG_PACKAGE_luci-lua-runtime'
+          check '^CONFIG_PACKAGE_curl=y$' 'CONFIG_PACKAGE_curl'
 
           # ---- iStoreOS 外观（Argon 主题）与中文界面 ----
           check '^CONFIG_PACKAGE_luci-theme-argon=y$'
