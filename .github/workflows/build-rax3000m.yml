@@ -218,6 +218,11 @@ jobs:
           check '^CONFIG_PACKAGE_lua=y$' 'CONFIG_PACKAGE_lua'
           check '^CONFIG_PACKAGE_luci-lua-runtime=y$' 'CONFIG_PACKAGE_luci-lua-runtime'
           check '^CONFIG_PACKAGE_curl=y$' 'CONFIG_PACKAGE_curl'
+          # tar 在 Kconfig 里带条件依赖：PACKAGE_TAR_XZ 默认 y ⇒ 必须有 xz-utils，
+          # 否则 tar 本身不可见，依赖它的 luci-app-store 一并消失，
+          # 且不可见符号不写进 .config（连 is not set 都没有），极难排查。
+          check '^CONFIG_PACKAGE_tar=y$' 'CONFIG_PACKAGE_tar'
+          check '^CONFIG_PACKAGE_xz-utils=y$' 'CONFIG_PACKAGE_xz-utils'
 
           # ---- iStoreOS 外观（Argon 主题）与中文界面 ----
           check '^CONFIG_PACKAGE_luci-theme-argon=y$'
