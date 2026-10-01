@@ -125,21 +125,33 @@ jobs:
           echo "--- (b) .config 中相关符号的实际取值 ---"
           grep -nE 'CONFIG_(PACKAGE_(luci-app-store|luci-lua-runtime|libuci-lua|liblua|lua|curl|tar|mount-utils|luci-compat|luci-lib-taskd|taskd)|LUCI_LANG_zh_Hans)' .config || echo "  (一条都没有)"
 
-          echo "--- (c) 这些符号在生成的 Kconfig 里是否存在 ---"
-          for s in PACKAGE_luci-app-store PACKAGE_luci-lua-runtime PACKAGE_libuci-lua PACKAGE_liblua PACKAGE_lua PACKAGE_curl PACKAGE_luci-lib-taskd; do
-            if grep -q "^config ${s}\$" tmp/.config-package.in; then
-              echo "  存在 ${s}"
-            else
-              echo "  缺失 ${s}"
-            fi
+          echo "--- (c) Kconfig 生成文件在哪、符号在不在（生成时带前导 TAB，别用 ^config 锚定） ---"
+          ls -la tmp/.config-*.in 2>/dev/null || echo "  tmp/.config-*.in 不存在"
+          for s in PACKAGE_luci-app-store PACKAGE_luci-lua-runtime PACKAGE_luci-lib-taskd PACKAGE_lua; do
+            n=$(grep -cE "^[[:space:]]*config ${s}\$" tmp/.config-package.in 2>/dev/null) || n="读不到"
+            echo "  ${s} -> ${n}"
           done
 
-          echo "--- (d) PACKAGE_luci-app-store 的 Kconfig 定义（看 depends/select） ---"
-          awk '/^config PACKAGE_luci-app-store$/{f=1} f{print} f&&/^(config|menuconfig) /&&$0!~/PACKAGE_luci-app-store$/{exit}' \
-            tmp/.config-package.in | head -60
+          echo "--- (d) PACKAGE_luci-app-store 的 Kconfig 定义 ---"
+          awk '/^[[:space:]]*config PACKAGE_luci-app-store$/{f=1} f{print} f&&/^[[:space:]]*(config|menuconfig) /&&$0!~/PACKAGE_luci-app-store$/{exit}' \
+            tmp/.config-package.in 2>/dev/null | head -40 || echo "  (读不到)"
 
-          echo "--- (e) tmp/.packageinfo 中的 luci-app-store 条目 ---"
-          grep -A3 '^Package: luci-app-store$' tmp/.packageinfo 2>/dev/null | head -12 || echo "  (无该条目，说明包没被 scan 到)"
+          echo "--- (e) .packageinfo: luci-app-store 的完整条目 ---"
+          awk '/^Package: luci-app-store$/{f=1} f{print} f&&/^@@/{exit}' tmp/.packageinfo 2>/dev/null || echo "  (无条目)"
+          echo "  ^ 该条目所属 Source-Makefile:"
+          awk '/^Source-Makefile:/{sm=$0} /^Package: luci-app-store$/{print "    "sm; exit}' tmp/.packageinfo 2>/dev/null
+          echo "--- (e2) 对照: luci-lib-taskd 的完整条目（它成功生成了符号） ---"
+          awk '/^Package: luci-lib-taskd$/{f=1} f{print} f&&/^@@/{exit}' tmp/.packageinfo 2>/dev/null || echo "  (无条目)"
+          awk '/^Source-Makefile:/{sm=$0} /^Package: luci-lib-taskd$/{print "    "sm; exit}' tmp/.packageinfo 2>/dev/null
+
+          echo "--- (f) luci-app-store 在各生成物里的出现次数 ---"
+          for f in tmp/.packageinfo tmp/.packagedeps tmp/.config-package.in; do
+            n=$(grep -c 'luci-app-store' "$f" 2>/dev/null) || n="读不到"
+            echo "  ${f} -> ${n}"
+          done
+
+          echo "--- (g) Kconfig 里 LuCI 分类下前 40 个包（看 store 系在不在） ---"
+          grep -oE "config PACKAGE_luci-[A-Za-z0-9._-]+" tmp/.config-package.in 2>/dev/null | sed 's/config PACKAGE_//' | sort -u | grep -E "store|taskd|xterm|lua-runtime|compat" || echo "  (一个都没匹配到)"
           set -e
           echo "::endgroup::"
           # ============ 诊断结束 ============
